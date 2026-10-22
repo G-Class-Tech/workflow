@@ -5,6 +5,7 @@ on:
     branches: [master]
   pull_request:
 
+# Least privilege; jobs that need more declare it themselves.
 permissions:
   contents: read
 
@@ -12,22 +13,36 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  PHP_VERSION: '8.5'
+  # Third-party actions are pinned to commit SHAs (tag shown in comment).
+  # Update them via Dependabot rather than by hand.
+
 jobs:
   quality:
+    name: quality
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: shivammathur/setup-php@v2
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # v2
         with:
-          php-version: '8.5'
+          php-version: ${{ env.PHP_VERSION }}
           coverage: none
 
-      - name: Cache composer
-        uses: actions/cache@v4
+      - name: Validate composer files
+        run: composer validate --strict --no-check-publish
+
+      - name: Get composer cache dir
+        id: composer-cache
+        run: echo "dir=$(composer config cache-files-dir)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
-          path: vendor
-          key: composer-${{ hashFiles('composer.lock') }}
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: composer-${{ runner.os }}-${{ hashFiles('composer.lock') }}
+          restore-keys: composer-${{ runner.os }}-
 
       - run: composer install --no-interaction --prefer-dist --no-progress
 
@@ -37,40 +52,116 @@ jobs:
       - name: Static analysis (Larastan)
         run: vendor/bin/phpstan analyse --memory-limit=1G --no-progress
 
-      - name: Tests
+  tests:
+    name: tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Run against the production database engine, not SQLite.
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: secret
+          MYSQL_DATABASE: testing
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -psecret"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      DB_CONNECTION: mysql
+      DB_HOST: 127.0.0.1
+      DB_PORT: 3306
+      DB_DATABASE: testing
+      DB_USERNAME: root
+      DB_PASSWORD: secret
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # v2
+        with:
+          php-version: ${{ env.PHP_VERSION }}
+          extensions: pdo_mysql
+          coverage: none
+
+      - name: Get composer cache dir
+        id: composer-cache
+        run: echo "dir=$(composer config cache-files-dir)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: composer-${{ runner.os }}-${{ hashFiles('composer.lock') }}
+          restore-keys: composer-${{ runner.os }}-
+
+      - run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Prepare app
         run: |
           cp .env.example .env
           php artisan key:generate
-          php artisan test
+
+      - name: Tests
+        run: php artisan test
 
   security:
+    name: security
     runs-on: ubuntu-latest
-    needs: quality
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
 
-      - uses: shivammathur/setup-php@v2
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # v2
         with:
-          php-version: '8.5'
+          php-version: ${{ env.PHP_VERSION }}
           coverage: none
 
-      # Known-CVE check on composer.lock (catches compromised/vulnerable packages)
+      # Known-CVE check on composer.lock (catches vulnerable/compromised packages)
       - name: Composer audit
         run: composer audit --locked
 
       # Committed secrets (.env keys, tokens, etc.)
       - name: Secret scan (gitleaks)
-        uses: gitleaks/gitleaks-action@v2
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  malware:
+  sast:
+    name: sast
     runs-on: ubuntu-latest
-    needs: [quality, security]
+    timeout-minutes: 15
+    container:
+      image: semgrep/semgrep:latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      # Scans our own code for injection, XSS, unsafe unserialize, etc.
+      - name: Semgrep
+        run: >-
+          semgrep scan
+          --config p/php
+          --config p/security-audit
+          --error --metrics=off
+          app routes config database resources bootstrap public
+
+  malware:
+    name: malware
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # v2
+        with:
+          php-version: ${{ env.PHP_VERSION }}
+          coverage: none
+
+      # Install dependencies so a poisoned package in vendor/ is scanned too.
+      - run: composer install --no-interaction --prefer-dist --no-progress --no-scripts
 
       - name: Install scanners
         run: |
@@ -79,19 +170,32 @@ jobs:
           sudo systemctl stop clamav-freshclam || true
           sudo freshclam
 
-      - name: ClamAV scan
+      - name: ClamAV scan (repo + vendor)
         run: clamscan -r -i --exclude-dir='^\.git$' .
 
-      # YARA rules tuned for PHP webshells/backdoors
-      - name: PHP backdoor scan (php-malware-finder)
-        run: |
-          git clone --depth 1 https://github.com/nbs-system/php-malware-finder.git "$RUNNER_TEMP/pmf"
-          if [ -n "$(yara -r -f "$RUNNER_TEMP/pmf/php.yar" app bootstrap config database routes resources public 2>/dev/null)" ]; then
-            yara -r -f "$RUNNER_TEMP/pmf/php.yar" app bootstrap config database routes resources public
-            exit 1
-          fi
+      # YARA rules tuned for PHP webshells/backdoors (tracks upstream master,
+      # so new signatures arrive automatically; pin a commit if you need stability).
+      - name: Fetch php-malware-finder
+        run: git clone --depth 1 https://github.com/nbs-system/php-malware-finder.git "$RUNNER_TEMP/pmf"
 
-      # Cheap heuristic: obfuscation/exec patterns that have no business in app code
+      - name: PHP backdoor scan - first-party code (strict)
+        run: |
+          out="$(yara -r -f "$RUNNER_TEMP/pmf/php.yar" app bootstrap config database routes resources public 2>/dev/null || true)"
+          if [ -n "$out" ]; then echo "$out"; echo "::error::Backdoor signature in first-party code"; exit 1; fi
+
+      # vendor/ legitimately contains risky functions, so this is report-only
+      # (surfaces hits in the log/summary for review, does not fail the build).
+      - name: PHP backdoor scan - vendor (report only)
+        run: |
+          out="$(yara -r -f "$RUNNER_TEMP/pmf/php.yar" vendor 2>/dev/null || true)"
+          {
+            echo "### YARA hits in vendor/ (review manually)"
+            echo '```'
+            echo "${out:-none}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Obfuscation/exec patterns that have no business in app code
       - name: Suspicious function grep
         run: |
           if grep -rEn --include='*.php' \
@@ -102,9 +206,20 @@ jobs:
             echo "::error::Suspicious code found"; exit 1
           fi
 
-      # PHP files should never live in uploads/storage-served paths
+      # PHP files should never live in web-served upload paths
       - name: PHP files in public/storage
         run: |
           if find public storage/app/public -name '*.php' ! -path 'public/index.php' 2>/dev/null | grep .; then
             echo "::error::Unexpected PHP files in web-served directories"; exit 1
           fi
+
+  # Single required status check for branch protection.
+  ci-pass:
+    name: ci-pass
+    if: always()
+    needs: [quality, tests, security, sast, malware]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify all jobs succeeded
+        run: |
+          echo '${{ toJSON(needs) }}' | grep -q '"result": "\(failure\|cancelled\|skipped\)"' && { echo "A required job did not succeed"; exit 1; } || echo "All jobs passed"
