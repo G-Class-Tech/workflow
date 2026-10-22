@@ -1,0 +1,108 @@
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          coverage: none
+
+      - name: Cache composer
+        uses: actions/cache@v4
+        with:
+          path: vendor
+          key: composer-${{ hashFiles('composer.lock') }}
+
+      - run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Code style (Pint)
+        run: vendor/bin/pint --test
+
+      - name: Static analysis (Larastan)
+        run: vendor/bin/phpstan analyse --memory-limit=1G --no-progress
+
+      - name: Tests
+        run: |
+          cp .env.example .env
+          php artisan key:generate
+          php artisan test
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          coverage: none
+
+      # Known-CVE check on composer.lock (catches compromised/vulnerable packages)
+      - name: Composer audit
+        run: composer audit --locked
+
+      # Committed secrets (.env keys, tokens, etc.)
+      - name: Secret scan (gitleaks)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  malware:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install scanners
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clamav yara
+          sudo systemctl stop clamav-freshclam || true
+          sudo freshclam
+
+      - name: ClamAV scan
+        run: clamscan -r -i --exclude-dir='^\.git$' .
+
+      # YARA rules tuned for PHP webshells/backdoors
+      - name: PHP backdoor scan (php-malware-finder)
+        run: |
+          git clone --depth 1 https://github.com/nbs-system/php-malware-finder.git "$RUNNER_TEMP/pmf"
+          if [ -n "$(yara -r -f "$RUNNER_TEMP/pmf/php.yar" app bootstrap config database routes resources public 2>/dev/null)" ]; then
+            yara -r -f "$RUNNER_TEMP/pmf/php.yar" app bootstrap config database routes resources public
+            exit 1
+          fi
+
+      # Cheap heuristic: obfuscation/exec patterns that have no business in app code
+      - name: Suspicious function grep
+        run: |
+          if grep -rEn --include='*.php' \
+            -e 'eval\s*\(\s*(base64_decode|gzinflate|gzuncompress|str_rot13)' \
+            -e '(assert|preg_replace\s*\(.*/e)\s*\(\s*\$_(GET|POST|REQUEST|COOKIE)' \
+            -e '(shell_exec|system|passthru|exec|proc_open|popen)\s*\(\s*\$_(GET|POST|REQUEST|COOKIE)' \
+            app bootstrap config database routes resources public; then
+            echo "::error::Suspicious code found"; exit 1
+          fi
+
+      # PHP files should never live in uploads/storage-served paths
+      - name: PHP files in public/storage
+        run: |
+          if find public storage/app/public -name '*.php' ! -path 'public/index.php' 2>/dev/null | grep .; then
+            echo "::error::Unexpected PHP files in web-served directories"; exit 1
+          fi
