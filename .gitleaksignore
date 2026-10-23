@@ -1,0 +1,2 @@
+# Deliberate fake token from the CI failure test (commit removed in a later commit).
+9402263cd5d6643d4be825c0e9071e40f5974a1c:config/fake.php:github-pat:2
