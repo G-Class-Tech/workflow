@@ -1,0 +1,33 @@
+# MySQL on the same host:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.db.yml up -d
+# Set DB_HOST=mysql in .env. Defaults below are fine for a test server;
+# override DB_DATABASE / DB_USERNAME / DB_PASSWORD in .env if you want.
+services:
+  mysql:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: ${DB_DATABASE:-laravel}
+      MYSQL_USER: ${DB_USERNAME:-laravel}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-secret}
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-root}
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  app:
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  queue:
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+volumes:
+  mysql-data:

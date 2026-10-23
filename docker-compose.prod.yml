@@ -13,4 +13,4 @@ services:
   web:
     restart: unless-stopped
     ports:
-      - "80:80"
+      - "${WEB_PORT:-80}:80"
