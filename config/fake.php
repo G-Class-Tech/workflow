@@ -1,2 +1,0 @@
-<?php
-return ['token' => 'ghp_aB3dE5gH7jK9mN1pQ3sT5vW7yZ9bC1dF3gH5'];
