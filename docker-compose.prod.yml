@@ -1,0 +1,16 @@
+# Production additions. Use with the base file only (this skips the dev override):
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+#
+# No MySQL container: set DB_HOST etc. in this directory's .env to your
+# external/managed database.
+services:
+  app:
+    restart: unless-stopped
+
+  queue:
+    restart: unless-stopped
+
+  web:
+    restart: unless-stopped
+    ports:
+      - "${WEB_PORT:-80}:80"

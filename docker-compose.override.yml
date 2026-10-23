@@ -1,0 +1,53 @@
+# Development additions. Loaded automatically by `docker compose up`;
+# NOT loaded when you pass explicit -f files (i.e. in production).
+#
+#   docker compose up -d --build
+#   docker compose exec app composer install
+#   docker compose exec app php artisan key:generate
+#   docker compose exec app php artisan migrate
+#
+# App: http://localhost:8080
+x-db-env: &db-env
+  DB_CONNECTION: mysql
+  DB_HOST: mysql
+  DB_PORT: 3306
+  DB_DATABASE: ${DB_DATABASE:-laravel}
+  DB_USERNAME: ${DB_USERNAME:-laravel}
+  DB_PASSWORD: ${DB_PASSWORD:-secret}
+
+services:
+  app:
+    environment: *db-env
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  queue:
+    environment: *db-env
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  web:
+    ports:
+      - "8080:80"
+
+  mysql:
+    image: mysql:8.0
+    ports:
+      - "127.0.0.1:3307:3306"
+    environment:
+      MYSQL_DATABASE: ${DB_DATABASE:-laravel}
+      MYSQL_USER: ${DB_USERNAME:-laravel}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-secret}
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-root}
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-p${DB_ROOT_PASSWORD:-root}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  mysql-data:

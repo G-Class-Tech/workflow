@@ -1,0 +1,33 @@
+# Base stack: no database container, no published ports. Code is bind-mounted;
+# nothing is baked into the image. DB settings come from the .env in this directory.
+#
+#   Development: docker compose up -d --build            (also loads docker-compose.override.yml)
+#   Production:  docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+#
+# Set HOST_UID/HOST_GID if your host user is not 1000:  HOST_UID=$(id -u) HOST_GID=$(id -g) docker compose ...
+x-php: &php
+  build:
+    context: .
+    args:
+      UID: ${HOST_UID:-1000}
+      GID: ${HOST_GID:-1000}
+  image: workflow-php
+  volumes:
+    - .:/var/www/html
+
+services:
+  app:
+    <<: *php
+
+  queue:
+    <<: *php
+    user: app
+    command: php artisan queue:work --tries=3
+
+  web:
+    image: nginx:1.27-alpine
+    volumes:
+      - .:/var/www/html:ro
+      - ./docker/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - app
