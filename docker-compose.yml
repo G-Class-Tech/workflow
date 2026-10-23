@@ -1,14 +1,10 @@
-# Development stack (code is mounted, nothing is baked into the image).
+# Base stack: no database container, no published ports. Code is bind-mounted;
+# nothing is baked into the image. DB settings come from the .env in this directory.
 #
-#   docker compose up -d --build
-#   docker compose exec app composer install
-#   docker compose exec app php artisan key:generate
-#   docker compose exec app php artisan migrate
-#   npm install && npm run dev        (or run node on the host)
+#   Development: docker compose up -d --build            (also loads docker-compose.override.yml)
+#   Production:  docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 #
-# App: http://localhost:8080
-#
-# Set UID/GID if your host user is not 1000:  UID=$(id -u) GID=$(id -g) docker compose up -d --build
+# Set UID/GID if your host user is not 1000:  UID=$(id -u) GID=$(id -g) docker compose ...
 x-php: &php
   build:
     context: .
@@ -18,16 +14,6 @@ x-php: &php
   image: workflow-php
   volumes:
     - .:/var/www/html
-  environment:
-    DB_CONNECTION: mysql
-    DB_HOST: mysql
-    DB_PORT: 3306
-    DB_DATABASE: ${DB_DATABASE:-laravel}
-    DB_USERNAME: ${DB_USERNAME:-laravel}
-    DB_PASSWORD: ${DB_PASSWORD:-secret}
-  depends_on:
-    mysql:
-      condition: service_healthy
 
 services:
   app:
@@ -40,30 +26,8 @@ services:
 
   web:
     image: nginx:1.27-alpine
-    ports:
-      - "8080:80"
     volumes:
       - .:/var/www/html:ro
       - ./docker/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
       - app
-
-  mysql:
-    image: mysql:8.0
-    ports:
-      - "3307:3306"
-    environment:
-      MYSQL_DATABASE: ${DB_DATABASE:-laravel}
-      MYSQL_USER: ${DB_USERNAME:-laravel}
-      MYSQL_PASSWORD: ${DB_PASSWORD:-secret}
-      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:-root}
-    volumes:
-      - mysql-data:/var/lib/mysql
-    healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-p${DB_ROOT_PASSWORD:-root}"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-
-volumes:
-  mysql-data:

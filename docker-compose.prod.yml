@@ -1,22 +1,16 @@
-# Production override. Use together with the base file:
+# Production additions. Use with the base file only (this skips the dev override):
 #   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 #
-# The code in the working directory (deployed by scripts/deploy.sh) is mounted;
-# database credentials come from that directory's .env. MySQL is NOT started
-# here - point DB_HOST in .env at your managed/external database.
-x-prod: &prod
-  restart: unless-stopped
-  environment: !reset {}
-  depends_on: !reset []
-
+# No MySQL container: set DB_HOST etc. in this directory's .env to your
+# external/managed database.
 services:
   app:
-    <<: *prod
+    restart: unless-stopped
+
   queue:
-    <<: *prod
+    restart: unless-stopped
+
   web:
     restart: unless-stopped
-    ports: !override
+    ports:
       - "80:80"
-  mysql:
-    profiles: ["dev-only"]
