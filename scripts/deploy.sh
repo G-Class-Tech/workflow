@@ -1,21 +1,37 @@
 #!/usr/bin/env bash
-# Runs on the server: bash scripts/deploy.sh <git-sha> [healthcheck-url]
+# Runs on the server, from the project directory:
+#   bash scripts/deploy.sh <git-sha> [healthcheck-url]
+# All PHP/composer/artisan work happens inside the docker compose stack;
+# only git, docker and the (throwaway) node container run on the host.
 set -euo pipefail
 
 SHA="${1:?usage: deploy.sh <git-sha> [healthcheck-url]}"
 HEALTH_URL="${2:-}"
+
+export COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yml:docker-compose.prod.yml:docker-compose.db.yml}"
+# Make the container user match the host user so storage/ and vendor/ stay writable.
+export HOST_UID="$(id -u)" HOST_GID="$(id -g)"
 
 PREVIOUS="$(git rev-parse HEAD)"
 
 release() {
     git fetch --prune origin
     git reset --hard "$1"
-    composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader
-    php artisan config:cache
-    php artisan route:cache
-    php artisan view:cache
-    php artisan event:cache
-    php artisan queue:restart
+
+    # Directories git ignores but Laravel needs to write to.
+    mkdir -p storage/framework/{cache/data,sessions,views} storage/logs bootstrap/cache
+    chmod -R ug+rwX storage bootstrap/cache
+
+    # Frontend assets (the image has no node).
+    docker run --rm -v "$PWD":/app -w /app node:22-alpine sh -c 'npm ci && npm run build'
+
+    docker compose up -d --build --remove-orphans
+    docker compose exec -T app composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader
+    docker compose exec -T app php artisan config:cache
+    docker compose exec -T app php artisan route:cache
+    docker compose exec -T app php artisan view:cache
+    docker compose exec -T app php artisan event:cache
+    docker compose exec -T app php artisan queue:restart
 }
 
 healthy() {
@@ -29,16 +45,10 @@ healthy() {
 
 echo "Deploying $SHA (previous: $PREVIOUS)"
 
-php artisan down --retry=60 || true
-trap 'php artisan up || true' EXIT
-
 release "$SHA"
 
 # Migrations must be backward-compatible: the old code is the rollback target.
-php artisan migrate --force
-
-php artisan up
-trap - EXIT
+docker compose exec -T app php artisan migrate --force
 
 if ! healthy; then
     echo "Health check failed - rolling code back to $PREVIOUS" >&2

@@ -4,13 +4,13 @@
 #   Development: docker compose up -d --build            (also loads docker-compose.override.yml)
 #   Production:  docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 #
-# Set UID/GID if your host user is not 1000:  UID=$(id -u) GID=$(id -g) docker compose ...
+# Set HOST_UID/HOST_GID if your host user is not 1000:  HOST_UID=$(id -u) HOST_GID=$(id -g) docker compose ...
 x-php: &php
   build:
     context: .
     args:
-      UID: ${UID:-1000}
-      GID: ${GID:-1000}
+      UID: ${HOST_UID:-1000}
+      GID: ${HOST_GID:-1000}
   image: workflow-php
   volumes:
     - .:/var/www/html
