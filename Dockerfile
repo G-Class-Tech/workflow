@@ -13,9 +13,9 @@ ARG UID=1000
 ARG GID=1000
 
 # opcache is built into PHP 8.5, so it is not installed as an extension.
-RUN apk add --no-cache icu-libs libzip oniguruma git unzip \
-    && apk add --no-cache --virtual .build-deps $PHPIZE_DEPS icu-dev libzip-dev oniguruma-dev \
-    && docker-php-ext-install -j"$(nproc)" pdo_mysql intl zip bcmath pcntl \
+RUN apk add --no-cache libzip oniguruma git unzip \
+    && apk add --no-cache --virtual .build-deps $PHPIZE_DEPS libzip-dev oniguruma-dev \
+    && docker-php-ext-install -j"$(nproc)" pdo_mysql zip bcmath pcntl \
     && apk del .build-deps \
     && addgroup -g "${GID}" app \
     && adduser -D -u "${UID}" -G app app

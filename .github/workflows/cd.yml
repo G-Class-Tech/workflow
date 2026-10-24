@@ -26,7 +26,7 @@ jobs:
     name: deploy
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 40
     # Secrets live here; required reviewers on this environment = the approval gate.
     environment:
       name: production
