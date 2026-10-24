@@ -20,12 +20,16 @@ release() {
 
     # Directories git ignores but Laravel needs to write to.
     mkdir -p storage/framework/{cache/data,sessions,views} storage/logs bootstrap/cache
-    chmod -R ug+rwX storage bootstrap/cache
 
     # Frontend assets (the image has no node).
     docker run --rm -v "$PWD":/app -w /app node:22-alpine sh -c 'npm ci && npm run build'
 
     docker compose up -d --build --remove-orphans
+
+    # Fix ownership from inside the container (root there), so it works even when
+    # files were created by another UID. exec runs as root; php-fpm workers run as `app`.
+    docker compose exec -T app chown -R app:app storage bootstrap/cache
+    docker compose exec -T app chmod -R ug+rwX storage bootstrap/cache
     docker compose exec -T app composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader
     docker compose exec -T app php artisan config:cache
     docker compose exec -T app php artisan route:cache
